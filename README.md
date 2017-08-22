@@ -1,0 +1,12 @@
+# ObjectDetector
+采用SIFT算子进行目标检测
+
+Step 1:在图像中使用SIFT算子中SiftFeatureDetector进行关键点检测
+Step 2:对检测到的关键点使用SiftDescriptorExtractor计算其特征向量
+Step 3:使用FlannBaseMatcher通过特征向量对关键点进行匹配，使用阈值排除误匹配
+Step 4:利用findHomography基于匹配的关键点找出相应的透视变换
+Step 5:利用perspectiveTransform函数映射点群，在场景中获取目标的位置
+
+使用的函数有：
+  SiftFeatureDetector,SiftDescriptorExtrator,
+  FlannBaseMatcher,findHomography,perspectiveTransform
