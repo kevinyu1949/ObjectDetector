@@ -1,0 +1,166 @@
+/***********************************************************************************************
+* @概述：采用SIFT算子进行目标检测
+* @类和函数：SiftFeatureDetector,SiftDescriptorExtractor,
+*			FlannBaseMatcher,findHomography,perspectiveTransform
+* @实现步骤：
+*		Step 1:在图像中使用SIFT算子中SiftFeatureDetector进行关键点检测
+*		Step 2:对检测到的关键点使用SiftDescriptorExtractor计算其特征向量
+*		Step 3:使用FlannBaseMatcher通过特征向量对关键点进行匹配，使用阈值排除误匹配
+*		Step 4:利用findHomography基于匹配的关键点找出相应的透视变换
+*		Step 5:利用perspectiveTransform函数映射点群，在场景中获取目标的位置
+*
+* @author:KevinYu 
+* @time:2017/08/17/19:50
+************************************************************************************************/
+
+#include <opencv2\opencv_modules.hpp>
+#include <opencv2\core\core.hpp>
+#include <opencv2\highgui\highgui.hpp>
+#include <opencv2\features2d\features2d.hpp>// FlannBaseMatcher 在该头文件中
+#include <opencv2\contrib\contrib.hpp>
+#include <opencv2\nonfree\nonfree.hpp> // SiftFeatureDetector 在该头文件中
+#include <opencv2\calib3d.hpp> // findHomography 在该头文件中
+//#include <stitching.hpp> // Image Stitching 包含在该头文件中
+#include <fstream>
+#include <iostream>
+#include <vector>
+#include <ctime>
+#include <time.h>
+
+using namespace std;
+using namespace cv;
+
+int main(void) 
+{
+	clock_t t_Start = clock(); // 获取当前的系统时间
+	bool flag = true; // 设置只输出一次的已经匹配好的点数
+
+
+	/* 读入并显示成功读入图片 */
+	Mat srcImage_Object = imread("1.png", CV_LOAD_IMAGE_GRAYSCALE); // 宏定义CV_LOAD_IMAGE_GRAYSCALE=0，读取灰度图像
+	Mat srcImage_Sence = imread("2.png", CV_LOAD_IMAGE_GRAYSCALE);
+
+	if (!(srcImage_Object.data) || !(srcImage_Sence.data))
+	{
+		cout << ">>>READING IMAGES IS ERROR." << endl;
+		return -1;
+	}
+	cout << ">>>READING IMAGES IS SUCCESS." << endl;
+	imshow("【srcImage_1】", srcImage_Object);
+	imshow("【srcImage_2】", srcImage_Sence);
+
+	/* Step 1:使用SIFT算子检测关键点 */
+	SiftFeatureDetector detector;
+	vector<KeyPoint> KeyPoint_Object, KeyPoint_Sence; // 定义检测关键点的向量集合
+
+	detector.detect(srcImage_Object,KeyPoint_Object); // 检测关键点，并将其放入向量集合中
+	detector.detect(srcImage_Sence, KeyPoint_Sence);  
+	cout << "Object--NUMBER OF KEYPOINTS:" << KeyPoint_Object.size() << endl;
+	cout << "Sence--NUMBER OF KEYPOINTS:" << KeyPoint_Sence.size() << endl;
+	cout << ">>>检测关键点--完成." << endl;
+
+
+	/* Step 2:使用SIFT算子提取特征值（计算特征向量） */
+	SiftDescriptorExtractor extractor;
+	Mat descriptors_Object, descriptors_Sence; // 定义接收向量的数据结构
+
+	extractor.compute(srcImage_Object,KeyPoint_Object,descriptors_Object);
+	extractor.compute(srcImage_Sence, KeyPoint_Sence, descriptors_Sence);
+	cout << ">>>提取特征值--完成." << endl;
+
+
+	/* Step 3:使用FLANN法进行匹配 */
+	FlannBasedMatcher matcher;
+	vector<DMatch> allMatches;
+
+	matcher.match(descriptors_Object,descriptors_Sence,allMatches); // 进行匹配，并将匹配结果放入向量集合 allMatchers 中
+	cout << "NUMBER OF MATCHES BEFORE FILTERING:" << allMatches.size() << endl;
+	cout << ">>>FLANN法进行匹配--完成." << endl;
+
+	/* 计算关键点间的最大最小距离 */
+	double maxDist = 0;
+	double minDist = 100;
+
+	for (int i = 0; i < descriptors_Object.rows; i++)
+	{
+		double dist = allMatches[i].distance;
+		if (dist<minDist)
+		{
+			minDist = dist;
+		}
+		if (dist>maxDist)
+		{
+			maxDist = dist;
+		}
+	}
+	cout << "maxDist is:" << maxDist << "  " << "minDist is:" << minDist << endl;
+
+	/* 去除误匹配点 */
+	vector<DMatch> goodMatches;
+
+	for (int i = 0; i < descriptors_Object.rows; i++)
+	{
+		if (allMatches[i].distance < 2 * minDist)
+			goodMatches.push_back(allMatches[i]);
+	}
+	cout << "NUNBER OF MATCHES AFTER FILTERING:" << goodMatches.size() << endl;
+	cout << ">>>消除误匹配--成功." << endl;
+
+	/* 显示匹配结果 */
+	Mat resultImages;
+
+	drawMatches(srcImage_Object, KeyPoint_Object, srcImage_Sence, KeyPoint_Sence,
+					goodMatches, resultImages,Scalar::all(-1),Scalar::all(-1),vector<char>(),
+					DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);//不显示未完整匹配的点
+
+	/* 输出点的匹配关系 */
+	for (int i = 0; i < goodMatches.size(); i++)
+	{
+		cout << "good match :KeyPointsObject["<<i<<"]"<<"-- KeyPointsSence:["<<i<<"]\n" << 
+			i<<goodMatches[i].queryIdx<<goodMatches[i].trainIdx << endl;
+	}
+	if (flag == true)
+	{
+		cout << "检测到已经完全匹配的特征点的数量是：" << goodMatches.size() << endl;
+		flag = false;
+	}
+
+
+	/* Step 4:使用findHomography找出相应的透视变换 */
+	vector<Point2f> object;
+	vector<Point2f> sence;
+
+	for (int i = 0; i < goodMatches.size(); i++)
+	{
+		object.push_back(KeyPoint_Object[goodMatches[i].queryIdx].pt);
+		sence.push_back(KeyPoint_Sence[goodMatches[i].trainIdx].pt);
+	}
+	Mat H = findHomography(object, sence, CV_RANSAC);
+
+
+	/* Step 5:使用perspectiveTransform映射点群，在场景中获取目标的位置*/
+	std::vector<Point2f> objcorners(4);
+	objcorners[0] = cvPoint(0,0);
+	objcorners[1] = cvPoint(srcImage_Object.cols,0);
+	objcorners[2] = cvPoint(srcImage_Object.cols,srcImage_Object.rows);
+	objcorners[3] = cvPoint(0,srcImage_Object.rows);
+	vector<Point2f> sceneCorners(4);
+	perspectiveTransform(objcorners, sceneCorners, H);
+
+	/* 在被检测到的目标的四个角之间划线 */
+	line(resultImages, sceneCorners[0] + Point2f(srcImage_Object.cols, 0), sceneCorners[1] + Point2f(srcImage_Object.cols, 0), Scalar(0, 255, 0));
+	line(resultImages, sceneCorners[1] + Point2f(srcImage_Object.cols, 0), sceneCorners[2] + Point2f(srcImage_Object.cols, 0), Scalar(0, 255, 0));
+	line(resultImages, sceneCorners[2] + Point2f(srcImage_Object.cols, 0), sceneCorners[3] + Point2f(srcImage_Object.cols, 0), Scalar(0, 255, 0));
+	line(resultImages, sceneCorners[3] + Point2f(srcImage_Object.cols, 0), sceneCorners[0] + Point2f(srcImage_Object.cols, 0), Scalar(0, 255, 0));
+
+	/* 显示检测结果 */
+	imshow(">>>detection result",resultImages);
+	//imwrite("result", resultImages);
+
+	clock_t t_End = clock(); // 获取当前系统的时间
+	//cout << "该程序运行所需要的时间是：" << (double)((t_End - t_Start)/CLOCKS_PER_SEC) << "ms" << endl;
+
+	waitKey(0);
+	return  0;
+
+}
